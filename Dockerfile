@@ -6,6 +6,8 @@ FROM --platform=linux/arm64 mcr.microsoft.com/playwright/python:v1.61.0-jammy
 
 WORKDIR /app
 
+ENV PYTHONUNBUFFERED=1
+
 # Install Python dependencies first (layer-cached until requirements change)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
