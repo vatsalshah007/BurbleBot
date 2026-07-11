@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "BLE"]
+# E   — pycodestyle errors
+# F   — pyflakes (unused imports, undefined names)
+# I   — isort (import ordering)
+# BLE — blind exception catch without re-raise (security/quality)
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
