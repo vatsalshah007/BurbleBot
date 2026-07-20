@@ -12,24 +12,21 @@ Exit codes:
     3 — Unexpected runtime error
 """
 
-import logging
+import os
 import sys
 
 from dotenv import load_dotenv
 
 from app.browser import BrowserController
 from app.config import Config
+from logger import BurbleBotLogger
 
 # ---------------------------------------------------------------------------
-# Logging — structured output for 24/7 unattended operation on Raspberry Pi 5
+# Logging — daily file in Logs/YYYY-MM-DD.log + stdout mirror
+# Must be the very first thing set up so all module loggers inherit it.
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-    stream=sys.stdout,
-)
-logger = logging.getLogger("burblebot")
+BurbleBotLogger.setup()
+logger = BurbleBotLogger.get("burblebot")
 
 
 def main() -> None:
@@ -63,6 +60,8 @@ def main() -> None:
         with BrowserController(config) as browser:
             browser.navigate(config.target_url)
             logger.info("Successfully reached: %s", config.target_url)
+            eta = browser.get_eta(os.getenv("JUMPER_MANIFEST_BODY", ""))
+            logger.info("ETA: %s", eta)
 
     except TimeoutError as exc:
         logger.error("Navigation failed (timeout or network error):\n%s", exc)

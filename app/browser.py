@@ -62,7 +62,7 @@ class BrowserController:
 
         logger.info("Launching headless Chromium (ARM64 mode)...")
         self._browser = self._playwright.chromium.launch(
-            headless=True,
+            headless=False,
             args=ARM64_CHROMIUM_ARGS,
         )
 
@@ -83,7 +83,7 @@ class BrowserController:
         Navigates to the given URL and waits until the network is idle.
 
         Args:
-            url:        The URL to navigate to.
+            url: The URL to navigate to.
             timeout_ms: Maximum milliseconds to wait for navigation (default 30s).
 
         Raises:
@@ -115,6 +115,64 @@ class BrowserController:
                 "BrowserController must be used as a context manager."
             )
         return self._page
+
+    def get_eta(self, selector: str) -> str:
+        """
+        Finds a specific DOM element by its CSS selector and logs all its direct child elements.
+        """
+        if self._page is None:
+            raise RuntimeError("Browser session not started.")
+            
+        if not selector:
+            logger.warning("No selector provided. Skipping child element extraction.")
+            return
+            
+        logger.info("Waiting for parent element: '%s'...", selector)
+        
+        # try:
+        #     # First, wait for the parent element to actually appear on the page
+        #     self._page.wait_for_selector(f'{selector} > div:nth-child(2)', state='visible')
+            
+        #     # Use Playwright's locator to find all direct children (the > * CSS selector)
+        #     children = self._page.locator(f"{selector} > div:nth-child(2) > div > div:nth-child(1) > *").all()
+
+        #     # logger.info("Found %d direct child element(s) inside '%s':", len(children), selector)
+            
+        #     # # Loop through each child and print its HTML tag and text content
+        #     # for index, child in enumerate(children, start=1):
+        #     #     # Grab the HTML tag name (e.g., div, span, a) using evaluate
+        #     #     tag_name = child.evaluate("el => el.tagName.toLowerCase()")
+                
+        #     #     # Grab the visible text inside the child element
+        #     #     text_content = child.inner_html()
+                
+        #     #     # Truncate the text if it's too long so the logs stay clean
+        #     #     # if len(text_content) > 200:
+        #     #     #     text_content = text_content[:200] + "..."
+                    
+        #     #     logger.info("  %d. <%s> content:\n%s\n%s", index, tag_name, text_content, "-"*50)
+                
+        # except Exception as exc:
+        #     logger.error("Failed to list child elements for '%s': %s", selector, exc)
+
+        try:
+            base_selector = f"{selector} > div:nth-child(2) > div > div:nth-child(1)"
+            
+            # 1. Target the 'table' and use .first to ensure we only grab the 1st one
+            # 2. Target the 'td' inside it and use .nth(1) to grab the 2nd one, i.e the time till the flight leaves
+            target_td = self._page.locator(f"{base_selector} table").first.locator("td").nth(1)
+            
+            # Wait for it to be visible just to be safe
+            target_td.wait_for(state="visible")
+            
+            eta = target_td.inner_text()
+            
+            logger.info("ETA: %s", eta)
+            return eta
+                        
+        except Exception as exc:
+            logger.error("Failed to find the 2nd TD: %s", exc)
+            return "Error"
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         """
