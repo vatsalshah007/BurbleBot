@@ -206,10 +206,17 @@ class BrowserController:
         logger.info("Waiting for base row path: '%s'...", base_path)
 
         try:
-            self._page.wait_for_selector(base_path, state="visible")
-        except Exception as exc:
-            logger.warning("Base selector '%s' not visible: %s", base_path, exc)
-            raise RuntimeError(f"Base selector '{base_path}' is not visible: {exc}") from exc
+            self._page.wait_for_selector(base_path, state="visible", timeout=5000)
+        except Exception:
+            logger.info("Base selector '%s' not visible (no active loads found).", base_path)
+            return {
+                "has_loads": False,
+                "load_number": None,
+                "load_locator": None,
+                "eta": None,
+                "eta_locator": None,
+                "flight_manifest_locator": None,
+            }
 
         load_num, load_locator = self._get_load_number(base_path)
         eta, eta_locator = self._get_eta(base_path)
@@ -217,6 +224,7 @@ class BrowserController:
         logger.info("Flight status extracted — Load Number: %s, ETA: %s", load_num, eta)
 
         return {
+            "has_loads": True,
             "load_number": load_num.split(" ")[-1],
             "load_locator": load_locator,
             "eta": eta,

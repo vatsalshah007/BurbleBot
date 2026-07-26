@@ -73,6 +73,15 @@ def main() -> None:
                 logger.info("Successfully reached: %s", config.target_url)
 
                 status = browser.get_flight_status(config.jumper_manifest_body)
+
+                # Edge case check: If dropzone has no active loads, set dynamic sleep to 15 minutes (900s)
+                if not status.get("has_loads", True):
+                    logger.info(
+                        "No active loads found under manifest body (Dropzone appears CLOSED). Dynamic sleep set to 15 minutes (900s)..."
+                    )
+                    time.sleep(15 * 60)
+                    continue
+
                 logger.info("Extracted Load Number: %s", status["load_number"])
                 logger.info("Extracted ETA: %s", status["eta"])
 
