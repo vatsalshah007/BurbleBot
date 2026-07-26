@@ -12,6 +12,8 @@ Exit codes:
     3 — Unexpected runtime error
 """
 
+from datetime import datetime
+from pathlib import Path
 import sys
 import time
 
@@ -38,8 +40,10 @@ def main() -> None:
          a. Open a headless Chromium session via BrowserController
          b. Navigate to TARGET_URL
          c. Extract flight status (load number and ETA) and live Playwright Locators
-         d. Gracefully close the browser session (guaranteed via context manager)
-         e. Sleep for config.sleep_interval seconds before next cycle
+         d. Construct dynamic output path and check duplicate prevention
+         e. Wait for flight closure and capture manifest screenshot if not already taken
+         f. Gracefully close the browser session (guaranteed via context manager)
+         g. Sleep for config.sleep_interval seconds before next cycle
     """
 
     # Step 1 — Load .env for local development.
@@ -72,6 +76,29 @@ def main() -> None:
                 logger.info("Extracted Load Number: %s", status["load_number"])
                 logger.info("Extracted ETA: %s", status["eta"])
 
+                # Dynamic path construction using current date and load number
+                today = datetime.now().strftime("%Y-%m-%d")
+                load_num = status["load_number"]
+
+                dest_dir = Path(config.output_destination)
+                if dest_dir.suffix.lower() == ".png":
+                    dest_dir = dest_dir.parent
+
+                output_file = dest_dir / f"{today}_load_num_{load_num}.png"
+                output_path_str = str(output_file)
+
+                # Duplicate-prevention check: skip wait/screenshot if file already exists
+                if output_file.exists():
+                    logger.info(
+                        "Manifest screenshot for Load %s on %s already exists (%s). Skipping closure wait.",
+                        load_num,
+                        today,
+                        output_file.name,
+                    )
+                else:
+                    browser.wait_for_flight_closed(status, output_path_str)
+
+        
         except TimeoutError as exc:
             logger.error("Navigation failed (timeout or network error):\n%s", exc)
 

@@ -9,6 +9,8 @@ Configured explicitly for ARM64 (Raspberry Pi 5) headless deployment.
 """
 
 import logging
+import time
+from pathlib import Path
 
 from playwright.sync_api import (
     Browser,
@@ -219,7 +221,68 @@ class BrowserController:
             "load_locator": load_locator,
             "eta": eta,
             "eta_locator": eta_locator,
+            "flight_manifest_locator": self._page.locator(base_path),
         }
+
+    def take_manifest_screenshot(self, status_dict: dict[str, any], output_path: str) -> None:
+        """
+        Captures a screenshot of the flight manifest row/table using status_dict["flight_manifest_locator"].
+
+        Args:
+            status_dict: Dictionary containing 'flight_manifest_locator' or 'load_locator'.
+            output_path: File path where the PNG screenshot will be saved.
+        """
+        target_locator = status_dict.get("flight_manifest_locator") or status_dict.get("load_locator")
+        if target_locator is None:
+            raise RuntimeError(
+                "Cannot take manifest screenshot: neither 'flight_manifest_locator' nor 'load_locator' found in status_dict."
+            )
+
+        parent_dir = Path(output_path).parent
+        parent_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Capturing manifest screenshot using flight_manifest_locator -> %s", output_path)
+        target_locator.screenshot(
+            path=output_path,
+            type="png",
+            animations="disabled",
+            timeout=10000,
+        )
+        logger.info("Screenshot successfully captured and saved: %s", output_path)
+
+    def wait_for_flight_closed(
+        self, status_dict: dict[str, any], output_path: str, poll_interval_s: int = 30
+    ) -> None:
+        """
+        Polls the live Playwright Locator (eta_locator or load_locator) in status_dict using time.sleep().
+        Continuously evaluates if the text content reads "Closed" (case-insensitive).
+        Once "Closed" is detected, immediately invokes self.take_manifest_screenshot(status_dict, output_path).
+
+        Args:
+            status_dict: Dictionary containing status locators and 'load_number'.
+            output_path: File path where screenshot will be saved.
+            poll_interval_s: Sleep duration between polls in seconds (default: 30s).
+        """
+        poll_locator = status_dict.get("eta_locator") or status_dict.get("load_locator")
+        if poll_locator is None:
+            raise RuntimeError("Cannot wait for flight closed: missing locator in status_dict.")
+
+        load_num = status_dict.get("load_number", "unknown")
+        logger.info("Starting closure monitoring for Load %s (polling every %ds)...", load_num, poll_interval_s)
+
+        while True:
+            try:
+                current_text = poll_locator.inner_text().strip()
+                logger.debug("Load %s status poll text: '%s'", load_num, current_text)
+
+                if current_text.lower() == "closed":
+                    logger.info("Flight for Load %s is CLOSED. Invoking manifest screenshot...", load_num)
+                    self.take_manifest_screenshot(status_dict, output_path)
+                    break
+            except Exception as exc:
+                logger.warning("Error reading status text for Load %s during poll: %s", load_num, exc)
+
+            time.sleep(poll_interval_s)
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         """

@@ -24,7 +24,10 @@ class Config:
 
     def __init__(self) -> None:
         self.target_url: str = os.getenv("TARGET_URL", "")
-        self.jumper_manifest_body: str = os.getenv("JUMPER_MANIFEST_BODY", "")
+        raw_manifest_body = os.getenv("JUMPER_MANIFEST_BODY", "#jumpermanifest-body")
+        self.jumper_manifest_body: str = (
+            raw_manifest_body.strip('"\'') if raw_manifest_body else "#jumpermanifest-body"
+        )
         self.sleep_interval: int = int(os.getenv("SLEEP_INTERVAL", "60"))
         self.output_destination: str = os.getenv(
             "OUTPUT_DESTINATION", "/app/output.png"
