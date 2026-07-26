@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.png
+Logs/
+tests/
+~/secrets/
+.agents/
+README.md

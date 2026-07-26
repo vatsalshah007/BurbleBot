@@ -13,11 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source
-COPY main.py .
-COPY app/ ./app/
-
-# .env.example for documentation — actual .env is injected at runtime
-COPY .env.example .
+COPY --chown=pwuser:pwuser . .
 
 # Run as non-root user for defence-in-depth
 # (the playwright base image includes a non-root 'pwuser')
