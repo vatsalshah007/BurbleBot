@@ -10,7 +10,14 @@ Configured explicitly for ARM64 (Raspberry Pi 5) headless deployment.
 
 import logging
 
-from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Locator,
+    Page,
+    Playwright,
+    sync_playwright,
+)
 
 from app.config import Config
 
@@ -62,7 +69,7 @@ class BrowserController:
 
         logger.info("Launching headless Chromium (ARM64 mode)...")
         self._browser = self._playwright.chromium.launch(
-            headless=False,
+            headless=True,
             args=ARM64_CHROMIUM_ARGS,
         )
 
@@ -116,63 +123,103 @@ class BrowserController:
             )
         return self._page
 
-    def get_eta(self, selector: str) -> str:
+    def _get_load_number(self, base_selector: str) -> tuple[str, Locator]:
         """
-        Finds a specific DOM element by its CSS selector and logs all its direct child elements.
+        Extracts load number text and live Locator from the 1st <td> element
+        inside the first <table> under base_selector.
+
+        Args:
+            base_selector: The parent DOM selector.
+
+        Returns:
+            Tuple of (cleaned load number text, target Locator object).
+
+        Raises:
+            RuntimeError: If extraction fails.
         """
         if self._page is None:
             raise RuntimeError("Browser session not started.")
-            
-        if not selector:
-            logger.warning("No selector provided. Skipping child element extraction.")
-            return
-            
-        logger.info("Waiting for parent element: '%s'...", selector)
-        
-        # try:
-        #     # First, wait for the parent element to actually appear on the page
-        #     self._page.wait_for_selector(f'{selector} > div:nth-child(2)', state='visible')
-            
-        #     # Use Playwright's locator to find all direct children (the > * CSS selector)
-        #     children = self._page.locator(f"{selector} > div:nth-child(2) > div > div:nth-child(1) > *").all()
-
-        #     # logger.info("Found %d direct child element(s) inside '%s':", len(children), selector)
-            
-        #     # # Loop through each child and print its HTML tag and text content
-        #     # for index, child in enumerate(children, start=1):
-        #     #     # Grab the HTML tag name (e.g., div, span, a) using evaluate
-        #     #     tag_name = child.evaluate("el => el.tagName.toLowerCase()")
-                
-        #     #     # Grab the visible text inside the child element
-        #     #     text_content = child.inner_html()
-                
-        #     #     # Truncate the text if it's too long so the logs stay clean
-        #     #     # if len(text_content) > 200:
-        #     #     #     text_content = text_content[:200] + "..."
-                    
-        #     #     logger.info("  %d. <%s> content:\n%s\n%s", index, tag_name, text_content, "-"*50)
-                
-        # except Exception as exc:
-        #     logger.error("Failed to list child elements for '%s': %s", selector, exc)
 
         try:
-            base_selector = f"{selector} > div:nth-child(2) > div > div:nth-child(1)"
-            
-            # 1. Target the 'table' and use .first to ensure we only grab the 1st one
-            # 2. Target the 'td' inside it and use .nth(1) to grab the 2nd one, i.e the time till the flight leaves
-            target_td = self._page.locator(f"{base_selector} table").first.locator("td").nth(1)
-            
-            # Wait for it to be visible just to be safe
-            target_td.wait_for(state="visible")
-            
-            eta = target_td.inner_text()
-            
-            logger.info("ETA: %s", eta)
-            return eta
-                        
+            table_loc = self._page.locator(f"{base_selector} table").first
+            load_locator = table_loc.locator("td").nth(0)
+            load_text = load_locator.inner_text().strip().replace("\n", " ")
+            return load_text, load_locator
         except Exception as exc:
-            logger.error("Failed to find the 2nd TD: %s", exc)
-            return "Error"
+            logger.warning("Failed to extract load number from '%s': %s", base_selector, exc)
+            raise RuntimeError(f"Failed to extract load number from '{base_selector}': {exc}") from exc
+
+    def _get_eta(self, base_selector: str) -> tuple[str, Locator]:
+        """
+        Extracts ETA text and live Locator from the 2nd <td> element
+        inside the first <table> under base_selector.
+
+        Args:
+            base_selector: The parent DOM selector.
+
+        Returns:
+            Tuple of (cleaned ETA text, target Locator object).
+
+        Raises:
+            RuntimeError: If extraction fails.
+        """
+        if self._page is None:
+            raise RuntimeError("Browser session not started.")
+
+        try:
+            table_loc = self._page.locator(f"{base_selector} table").first
+            eta_locator = table_loc.locator("td").nth(1)
+            eta_text = eta_locator.inner_text().strip()
+            return eta_text, eta_locator
+        except Exception as exc:
+            logger.warning("Failed to extract ETA from '%s': %s", base_selector, exc)
+            raise RuntimeError(f"Failed to extract ETA from '{base_selector}': {exc}") from exc
+
+    def get_flight_status(self, selector: str) -> dict[str, any]:
+        """
+        Coordinates extraction of flight load number and ETA from the DOM.
+
+        Args:
+            selector: Base CSS selector for the manifest body.
+
+        Returns:
+            Dictionary containing cleaned text data and live Playwright Locators:
+            {
+                "load_number": load_num,
+                "load_locator": load_locator,
+                "eta": eta,
+                "eta_locator": eta_locator
+            }
+
+        Raises:
+            RuntimeError: If base selector is not visible or extraction fails.
+        """
+        if self._page is None:
+            raise RuntimeError("Browser session not started.")
+
+        if not selector:
+            raise RuntimeError("No selector provided for flight status extraction.")
+
+        base_path = f"{selector} > div:nth-child(2) > div > div:nth-child(1)"
+        logger.info("Waiting for base row path: '%s'...", base_path)
+
+        try:
+            self._page.wait_for_selector(base_path, state="visible")
+        except Exception as exc:
+            logger.warning("Base selector '%s' not visible: %s", base_path, exc)
+            raise RuntimeError(f"Base selector '{base_path}' is not visible: {exc}") from exc
+
+        load_num, load_locator = self._get_load_number(base_path)
+        eta, eta_locator = self._get_eta(base_path)
+
+        logger.info("Flight status extracted — Load Number: %s, ETA: %s", load_num, eta)
+
+        return {
+            "load_number": load_num.split(" ")[-1],
+            "load_locator": load_locator,
+            "eta": eta,
+            "eta_locator": eta_locator,
+        }
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         """

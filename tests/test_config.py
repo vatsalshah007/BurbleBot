@@ -48,19 +48,19 @@ class TestConfigSuccess:
         config = Config()
         assert config.output_destination == "/data/screenshots/output.png"
 
-    def test_optional_target_selector_empty_by_default(self, monkeypatch):
-        """TARGET_SELECTOR defaults to an empty string when not set."""
+    def test_default_jumper_manifest_body(self, monkeypatch):
+        """JUMPER_MANIFEST_BODY defaults to #jumpermanifest-body when not set."""
         monkeypatch.setenv("TARGET_URL", "https://example.com")
-        monkeypatch.delenv("TARGET_SELECTOR", raising=False)
+        monkeypatch.delenv("JUMPER_MANIFEST_BODY", raising=False)
         config = Config()
-        assert config.target_selector == ""
+        assert config.jumper_manifest_body == "#jumpermanifest-body"
 
-    def test_optional_target_selector_is_read(self, monkeypatch):
-        """TARGET_SELECTOR is correctly read when provided."""
+    def test_custom_jumper_manifest_body(self, monkeypatch):
+        """JUMPER_MANIFEST_BODY is correctly read when provided."""
         monkeypatch.setenv("TARGET_URL", "https://example.com")
-        monkeypatch.setenv("TARGET_SELECTOR", "div.custom-chart")
+        monkeypatch.setenv("JUMPER_MANIFEST_BODY", "#custom-manifest")
         config = Config()
-        assert config.target_selector == "div.custom-chart"
+        assert config.jumper_manifest_body == "#custom-manifest"
 
 
 class TestConfigValidationFailures:

@@ -12,7 +12,6 @@ Exit codes:
     3 — Unexpected runtime error
 """
 
-import os
 import sys
 
 from dotenv import load_dotenv
@@ -36,7 +35,8 @@ def main() -> None:
       2. Validate all required environment variables via Config
       3. Open a headless Chromium session via BrowserController
       4. Navigate to TARGET_URL
-      5. Gracefully close the browser session (guaranteed via context manager)
+      5. Extract flight status (load number and ETA) and live Playwright Locators
+      6. Gracefully close the browser session (guaranteed via context manager)
     """
 
     # Step 1 — Load .env for local development.
@@ -53,15 +53,17 @@ def main() -> None:
         logger.error("Configuration error:\n%s", exc)
         sys.exit(1)
 
-    # Step 3 & 4 — Launch browser and navigate.
+    # Step 3, 4 & 5 — Launch browser, navigate, and extract flight status.
     # The 'with' block guarantees __exit__ is always called, closing the browser
     # cleanly whether navigation succeeds, times out, or raises unexpectedly.
     try:
         with BrowserController(config) as browser:
             browser.navigate(config.target_url)
             logger.info("Successfully reached: %s", config.target_url)
-            eta = browser.get_eta(os.getenv("JUMPER_MANIFEST_BODY", ""))
-            logger.info("ETA: %s", eta)
+
+            status = browser.get_flight_status(config.jumper_manifest_body)
+            logger.info("Extracted Load Number: %s", status["load_number"])
+            logger.info("Extracted ETA: %s", status["eta"])
 
     except TimeoutError as exc:
         logger.error("Navigation failed (timeout or network error):\n%s", exc)

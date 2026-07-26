@@ -17,14 +17,14 @@ class Config:
         TARGET_URL          The URL to navigate to.
 
     Optional:
-        TARGET_SELECTOR     CSS selector to wait for after navigation.
+        JUMPER_MANIFEST_BODY CSS selector for the Jumper Manifest Body (default: #jumpermanifest-body).
         SLEEP_INTERVAL      Seconds between capture cycles (default: 60).
         OUTPUT_DESTINATION  File path for screenshot output (default: /app/output.png).
     """
 
     def __init__(self) -> None:
         self.target_url: str = os.getenv("TARGET_URL", "")
-        self.target_selector: str = os.getenv("TARGET_SELECTOR", "")
+        self.jumper_manifest_body: str = os.getenv("JUMPER_MANIFEST_BODY", "")
         self.sleep_interval: int = int(os.getenv("SLEEP_INTERVAL", "60"))
         self.output_destination: str = os.getenv(
             "OUTPUT_DESTINATION", "/app/output.png"
@@ -53,7 +53,7 @@ class Config:
         return (
             f"Config("
             f"target_url={self.target_url!r}, "
-            f"target_selector={self.target_selector!r}, "
+            f"jumper_manifest_body={self.jumper_manifest_body!r}, "
             f"sleep_interval={self.sleep_interval}, "
             f"output_destination={self.output_destination!r})"
         )
