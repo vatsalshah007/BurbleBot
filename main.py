@@ -13,6 +13,7 @@ Exit codes:
 """
 
 import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -30,13 +31,15 @@ logger = BurbleBotLogger.get("burblebot")
 
 def main() -> None:
     """
-    Main execution flow:
+    Main execution flow (24/7 continuous monitoring loop):
       1. Load .env into os.environ (no-op if already set by the container runtime)
       2. Validate all required environment variables via Config
-      3. Open a headless Chromium session via BrowserController
-      4. Navigate to TARGET_URL
-      5. Extract flight status (load number and ETA) and live Playwright Locators
-      6. Gracefully close the browser session (guaranteed via context manager)
+      3. Enter continuous monitoring loop:
+         a. Open a headless Chromium session via BrowserController
+         b. Navigate to TARGET_URL
+         c. Extract flight status (load number and ETA) and live Playwright Locators
+         d. Gracefully close the browser session (guaranteed via context manager)
+         e. Sleep for config.sleep_interval seconds before next cycle
     """
 
     # Step 1 — Load .env for local development.
@@ -53,27 +56,33 @@ def main() -> None:
         logger.error("Configuration error:\n%s", exc)
         sys.exit(1)
 
-    # Step 3, 4 & 5 — Launch browser, navigate, and extract flight status.
-    # The 'with' block guarantees __exit__ is always called, closing the browser
-    # cleanly whether navigation succeeds, times out, or raises unexpectedly.
-    try:
-        with BrowserController(config) as browser:
-            browser.navigate(config.target_url)
-            logger.info("Successfully reached: %s", config.target_url)
+    logger.info(
+        "Starting 24/7 continuous monitoring loop (interval: %ds)...",
+        config.sleep_interval,
+    )
 
-            status = browser.get_flight_status(config.jumper_manifest_body)
-            logger.info("Extracted Load Number: %s", status["load_number"])
-            logger.info("Extracted ETA: %s", status["eta"])
+    # Step 3 — Continuous loop
+    while True:
+        try:
+            with BrowserController(config) as browser:
+                browser.navigate(config.target_url)
+                logger.info("Successfully reached: %s", config.target_url)
 
-    except TimeoutError as exc:
-        logger.error("Navigation failed (timeout or network error):\n%s", exc)
-        sys.exit(2)
+                status = browser.get_flight_status(config.jumper_manifest_body)
+                logger.info("Extracted Load Number: %s", status["load_number"])
+                logger.info("Extracted ETA: %s", status["eta"])
 
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Unexpected error during browser session:\n%s", exc, exc_info=True)
-        sys.exit(3)
+        except TimeoutError as exc:
+            logger.error("Navigation failed (timeout or network error):\n%s", exc)
 
-    logger.info("Task 1 complete. Browser session closed cleanly.")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Unexpected error during capture cycle:\n%s", exc, exc_info=True)
+
+        logger.info(
+            "Cycle complete. Sleeping for %d seconds before next cycle...",
+            config.sleep_interval,
+        )
+        time.sleep(config.sleep_interval)
 
 
 if __name__ == "__main__":
