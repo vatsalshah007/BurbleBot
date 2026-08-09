@@ -15,23 +15,26 @@ class Config:
 
     Required:
         TARGET_URL          The URL to navigate to.
+        JUMPER_MANIFEST_BODY CSS selector for the Jumper Manifest Body.
+        JUMPER_MANIFEST_LOAD CSS selector for the Jumper Manifest Load element.
 
     Optional:
-        JUMPER_MANIFEST_BODY CSS selector for the Jumper Manifest Body (default: #jumpermanifest-body).
         SLEEP_INTERVAL      Seconds between capture cycles (default: 60).
         OUTPUT_DESTINATION  File path for screenshot output (default: /app/output.png).
     """
 
     def __init__(self) -> None:
-        self.target_url: str = os.getenv("TARGET_URL", "")
-        raw_manifest_body = os.getenv("JUMPER_MANIFEST_BODY", "#jumpermanifest-body")
-        self.jumper_manifest_body: str = (
-            raw_manifest_body.strip('"\'') if raw_manifest_body else "#jumpermanifest-body"
-        )
+        self.target_url: str = os.getenv("TARGET_URL", "").strip('"\'')
+        self.jumper_manifest_body: str = os.getenv(
+            "JUMPER_MANIFEST_BODY", ""
+        ).strip('"\'')
+        self.jumper_manifest_load: str = os.getenv(
+            "JUMPER_MANIFEST_LOAD", ""
+        ).strip('"\'')
         self.sleep_interval: int = int(os.getenv("SLEEP_INTERVAL", "60"))
         self.output_destination: str = os.getenv(
             "OUTPUT_DESTINATION", "/app/output.png"
-        )
+        ).strip('"\'')
         self._validate()
 
     def _validate(self) -> None:
@@ -47,6 +50,20 @@ class Config:
                 "  export TARGET_URL=https://example.com"
             )
 
+        if not self.jumper_manifest_body or not self.jumper_manifest_body.strip():
+            raise EnvironmentError(
+                "Missing required environment variable: JUMPER_MANIFEST_BODY\n"
+                "Set it in your .env file or export it before running:\n"
+                "  export JUMPER_MANIFEST_BODY=#jumpermanifest-body"
+            )
+
+        if not self.jumper_manifest_load or not self.jumper_manifest_load.strip():
+            raise EnvironmentError(
+                "Missing required environment variable: JUMPER_MANIFEST_LOAD\n"
+                "Set it in your .env file or export it before running:\n"
+                "  export JUMPER_MANIFEST_LOAD=.load-row"
+            )
+
         if self.sleep_interval < 1:
             raise EnvironmentError(
                 f"SLEEP_INTERVAL must be a positive integer, got: {self.sleep_interval}"
@@ -57,6 +74,7 @@ class Config:
             f"Config("
             f"target_url={self.target_url!r}, "
             f"jumper_manifest_body={self.jumper_manifest_body!r}, "
+            f"jumper_manifest_load={self.jumper_manifest_load!r}, "
             f"sleep_interval={self.sleep_interval}, "
             f"output_destination={self.output_destination!r})"
         )

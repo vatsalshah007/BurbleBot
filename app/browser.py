@@ -202,7 +202,7 @@ class BrowserController:
         if not selector:
             raise RuntimeError("No selector provided for flight status extraction.")
 
-        base_path = f"{selector} > div:nth-child(2) > div > div:nth-child(1)"
+        base_path = f"{selector} div[id^='{self._config.jumper_manifest_load}']"
         logger.info("Waiting for base row path: '%s'...", base_path)
 
         try:
