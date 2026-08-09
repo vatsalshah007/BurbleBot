@@ -229,7 +229,7 @@ class BrowserController:
             "load_locator": load_locator,
             "eta": eta,
             "eta_locator": eta_locator,
-            "flight_manifest_locator": self._page.locator(base_path),
+            "flight_manifest_locator": self._page.locator(base_path).first,
         }
 
     def take_manifest_screenshot(self, status_dict: dict[str, any], output_path: str) -> None:

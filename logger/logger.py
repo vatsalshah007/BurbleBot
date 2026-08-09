@@ -5,6 +5,10 @@ Sets up a daily rotating log file under the Logs/ directory.
 Every time the script runs, it checks today's date and writes all logs
 to Logs/YYYY-MM-DD.log — a fresh file is used automatically each day.
 
+For 24/7 long-running containers, call `BurbleBotLogger.rotate_if_needed()`
+at the top of each monitoring cycle. When the date rolls over, the old
+file handler is closed and a new one is opened for the new day.
+
 Logs are written to BOTH:
   - The daily file in Logs/   (persistent record)
   - stdout                    (visible in Docker / systemd on Pi)
@@ -12,8 +16,9 @@ Logs are written to BOTH:
 Usage:
     from logger import BurbleBotLogger
 
-    BurbleBotLogger.setup()          # call once at startup in main.py
-    log = BurbleBotLogger.get("name") # get a named child logger anywhere
+    BurbleBotLogger.setup()                    # call once at startup
+    log = BurbleBotLogger.get("name")          # get a named child logger
+    BurbleBotLogger.rotate_if_needed()         # call at the top of each cycle
 """
 
 import logging
@@ -37,12 +42,18 @@ class BurbleBotLogger:
     Configures and manages the application-wide logging setup.
 
     Call `BurbleBotLogger.setup()` once at the very start of main.py.
+    Call `BurbleBotLogger.rotate_if_needed()` at the top of each monitoring
+    cycle to ensure logs roll over to a new file at midnight.
+
     All subsequent `logging.getLogger(name)` calls — including those
     inside app/browser.py and app/config.py — will automatically
     inherit the configured handlers.
     """
 
     _initialised: bool = False
+    _current_date: str = ""
+    _file_handler: logging.FileHandler | None = None
+    _level: int = logging.INFO
 
     @classmethod
     def setup(cls, level: int = logging.INFO) -> None:
@@ -58,6 +69,8 @@ class BurbleBotLogger:
         """
         if cls._initialised:
             return
+
+        cls._level = level
 
         # Ensure Logs/ directory exists
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -84,12 +97,59 @@ class BurbleBotLogger:
         root.addHandler(file_handler)
         root.addHandler(stream_handler)
 
+        # Track state for daily rotation
+        cls._file_handler = file_handler
+        cls._current_date = today
         cls._initialised = True
 
         # Log the first entry so the file is visibly opened
         startup_log = cls.get("burblebot.logger")
         startup_log.info(
             "Logging initialised. Writing to: %s",
+            log_file.relative_to(_PROJECT_ROOT),
+        )
+
+    @classmethod
+    def rotate_if_needed(cls) -> None:
+        """
+        Checks if the date has rolled over since the last log file was opened.
+        If so, closes the old file handler and opens a new one for today.
+
+        Call this at the top of each monitoring cycle in main.py.
+        No-op if the date has not changed or if setup() has not been called.
+        """
+        if not cls._initialised:
+            return
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        if today == cls._current_date:
+            return
+
+        # Date has rolled over — swap file handler
+        root = logging.getLogger()
+
+        # Close and remove old file handler
+        if cls._file_handler is not None:
+            cls._file_handler.close()
+            root.removeHandler(cls._file_handler)
+
+        # Create new file handler for today
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        log_file = LOGS_DIR / f"{today}.log"
+
+        formatter = logging.Formatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT)
+        new_handler = logging.FileHandler(log_file, encoding="utf-8", mode="a")
+        new_handler.setLevel(cls._level)
+        new_handler.setFormatter(formatter)
+
+        root.addHandler(new_handler)
+
+        cls._file_handler = new_handler
+        cls._current_date = today
+
+        rotation_log = cls.get("burblebot.logger")
+        rotation_log.info(
+            "Log file rotated for new day. Now writing to: %s",
             log_file.relative_to(_PROJECT_ROOT),
         )
 
@@ -119,3 +179,4 @@ class BurbleBotLogger:
         """
         today = datetime.now().strftime("%Y-%m-%d")
         return LOGS_DIR / f"{today}.log"
+

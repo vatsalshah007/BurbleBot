@@ -67,6 +67,9 @@ def main() -> None:
 
     # Step 3 — Continuous loop
     while True:
+        # Rotate log file if the date has rolled over (midnight boundary)
+        BurbleBotLogger.rotate_if_needed()
+
         try:
             with BrowserController(config) as browser:
                 browser.navigate(config.target_url)
@@ -93,7 +96,8 @@ def main() -> None:
                 if dest_dir.suffix.lower() == ".png":
                     dest_dir = dest_dir.parent
 
-                output_file = dest_dir / f"{today}_load_num_{load_num}.png"
+                # Screenshots saved into dated subfolder: {dest_dir}/{today}/load_num_{load_num}.png
+                output_file = dest_dir / today / f"load_num_{load_num}.png"
                 output_path_str = str(output_file)
 
                 # Duplicate-prevention check: skip wait/screenshot if file already exists
