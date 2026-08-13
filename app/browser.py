@@ -54,8 +54,9 @@ class BrowserController:
     exception was raised inside the block.
     """
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, playwright: Playwright | None = None) -> None:
         self._config = config
+        self._provided_playwright = playwright
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -67,7 +68,10 @@ class BrowserController:
         configured for ARM64 Linux deployment.
         """
         logger.info("Starting Playwright runtime...")
-        self._playwright = sync_playwright().start()
+        if self._provided_playwright is not None:
+            self._playwright = self._provided_playwright
+        else:
+            self._playwright = sync_playwright().start()
 
         logger.info("Launching headless Chromium (ARM64 mode)...")
         self._browser = self._playwright.chromium.launch(
@@ -329,7 +333,9 @@ class BrowserController:
             finally:
                 self._browser = None
 
-        if self._playwright is not None:
+        # Only stop the Playwright runtime if we started it ourselves.
+        # When an external runtime is provided, the caller owns its lifecycle.
+        if self._playwright is not None and self._provided_playwright is None:
             try:
                 self._playwright.stop()
                 logger.debug("Playwright runtime stopped.")
