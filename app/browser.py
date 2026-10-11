@@ -8,9 +8,11 @@ preventing memory leaks during 24/7 continuous operation.
 Configured explicitly for ARM64 (Raspberry Pi 5) headless deployment.
 """
 
+from datetime import datetime
 import logging
-import time
 from pathlib import Path
+import re
+import time
 
 from playwright.sync_api import (
     Browser,
@@ -75,7 +77,7 @@ class BrowserController:
 
         logger.info("Launching headless Chromium (ARM64 mode)...")
         self._browser = self._playwright.chromium.launch(
-            headless=True,
+            headless=False,
             args=ARM64_CHROMIUM_ARGS,
         )
 
@@ -129,13 +131,14 @@ class BrowserController:
             )
         return self._page
 
-    def _get_load_number(self, base_selector: str) -> tuple[str, Locator]:
+    def _get_load_number(self, target: str | Locator, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> tuple[str, Locator]:
         """
         Extracts load number text and live Locator from the 1st <td> element
-        inside the first <table> under base_selector.
+        inside the first <table> under target (either a selector str or parent Locator).
 
         Args:
-            base_selector: The parent DOM selector.
+            target: The parent DOM selector string or parent Locator.
+            timeout_ms: Maximum milliseconds to wait for the element text (default 30s).
 
         Returns:
             Tuple of (cleaned load number text, target Locator object).
@@ -147,21 +150,26 @@ class BrowserController:
             raise RuntimeError("Browser session not started.")
 
         try:
-            table_loc = self._page.locator(f"{base_selector} table").first
+            if isinstance(target, str):
+                table_loc = self._page.locator(f"{target} table").first
+            else:
+                table_loc = target.locator("table").first
+
             load_locator = table_loc.locator("td").nth(0)
-            load_text = load_locator.inner_text().strip().replace("\n", " ")
+            load_text = load_locator.inner_text(timeout=timeout_ms).strip().replace("\n", " ")
             return load_text, load_locator
         except Exception as exc:
-            logger.warning("Failed to extract load number from '%s': %s", base_selector, exc)
-            raise RuntimeError(f"Failed to extract load number from '{base_selector}': {exc}") from exc
+            logger.debug("Failed to extract load number from '%s': %s", target, exc)
+            raise RuntimeError(f"Failed to extract load number: {exc}") from exc
 
-    def _get_eta(self, base_selector: str) -> tuple[str, Locator]:
+    def _get_eta(self, target: str | Locator, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> tuple[str, Locator]:
         """
         Extracts ETA text and live Locator from the 2nd <td> element
-        inside the first <table> under base_selector.
+        inside the first <table> under target (either a selector str or parent Locator).
 
         Args:
-            base_selector: The parent DOM selector.
+            target: The parent DOM selector string or parent Locator.
+            timeout_ms: Maximum milliseconds to wait for the element text (default 30s).
 
         Returns:
             Tuple of (cleaned ETA text, target Locator object).
@@ -173,13 +181,17 @@ class BrowserController:
             raise RuntimeError("Browser session not started.")
 
         try:
-            table_loc = self._page.locator(f"{base_selector} table").first
+            if isinstance(target, str):
+                table_loc = self._page.locator(f"{target} table").first
+            else:
+                table_loc = target.locator("table").first
+
             eta_locator = table_loc.locator("td").nth(1)
-            eta_text = eta_locator.inner_text().strip()
+            eta_text = eta_locator.inner_text(timeout=timeout_ms).strip()
             return eta_text, eta_locator
         except Exception as exc:
-            logger.warning("Failed to extract ETA from '%s': %s", base_selector, exc)
-            raise RuntimeError(f"Failed to extract ETA from '{base_selector}': {exc}") from exc
+            logger.debug("Failed to extract ETA from '%s': %s", target, exc)
+            raise RuntimeError(f"Failed to extract ETA: {exc}") from exc
 
     def get_flight_status(self, selector: str) -> dict[str, any]:
         """
@@ -262,39 +274,236 @@ class BrowserController:
         )
         logger.info("Screenshot successfully captured and saved: %s", output_path)
 
-    def wait_for_flight_closed(
-        self, status_dict: dict[str, any], output_path: str, poll_interval_s: int = 30
-    ) -> None:
+    def _is_date_rolled_over(self, start_date: str) -> bool:
+        """Returns True if the current calendar date has rolled over past start_date."""
+        return datetime.now().strftime("%Y-%m-%d") != start_date
+
+    def _parse_eta_minutes(self, eta_text: str) -> int | None:
         """
-        Polls the live Playwright Locator (eta_locator or load_locator) in status_dict using time.sleep().
-        Continuously evaluates if the text content reads "Closed" (case-insensitive).
-        Once "Closed" is detected, immediately invokes self.take_manifest_screenshot(status_dict, output_path).
+        Extracts signed integer minutes from ETA text (e.g., '10 Mins' -> 10, '-2 Mins' -> -2).
+        Returns None if text cannot be parsed into an integer (e.g. 'Closed').
+        """
+        if not eta_text:
+            return None
+        match = re.search(r"(-?\d+)", eta_text)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+        return None
+
+    def _get_poll_interval(self, eta_minutes: int | None, default_poll_interval_sec: int = 30) -> int:
+        """
+        Dynamic polling helper:
+        - 5s if eta_minutes is defined and <= 1 (fast polling near closure).
+        - default_poll_interval_sec otherwise (standard polling).
+        """
+        if eta_minutes is not None and eta_minutes <= 1:
+            return 5
+        return default_poll_interval_sec
+
+    def _should_recycle_session(self, elapsed_seconds: float, eta_minutes: int | None, max_duration_sec: int = 2700) -> bool:
+        """
+        Weather hold / session recycling helper:
+        Determines if browser session should be recycled to prevent memory bloat on Pi.
+        Enforces Rule 1: Never recycle if eta_minutes <= 5 (finish monitoring imminent flight).
+        """
+        if elapsed_seconds < max_duration_sec:
+            return False
+        # Rule 1: Never recycle if ETA <= 5 (finish monitoring imminent flight)
+        if eta_minutes is not None and eta_minutes <= 5:
+            return False
+        return True
+
+    def _check_active_section(self, target_load_number: str) -> dict[str, any]:
+        """
+        Inspects the first visible load section on the board and verifies if it
+        still matches target_load_number.
+
+        Returns a dictionary:
+        {
+            "is_active": bool,
+            "load_number": str | None,
+            "eta": str | None,
+            "flight_manifest_locator": Locator | None,
+            "reason": str,  # 'ok', 'no_loads', 'not_visible', 'load_mismatch', 'error'
+        }
+        """
+        if self._page is None:
+            return {
+                "is_active": False,
+                "load_number": None,
+                "eta": None,
+                "flight_manifest_locator": None,
+                "reason": "no_page",
+            }
+
+        base_path = f"{self._config.jumper_manifest_body} div[id^='{self._config.jumper_manifest_load}']"
+        try:
+            rows = self._page.locator(base_path)
+            if rows.count() == 0:
+                time.sleep(1)
+                if rows.count() == 0:
+                    return {
+                        "is_active": False,
+                        "load_number": None,
+                        "eta": None,
+                        "flight_manifest_locator": None,
+                        "reason": "no_loads",
+                    }
+
+            first_row = rows.first
+            if not first_row.is_visible():
+                time.sleep(1)
+                if not first_row.is_visible():
+                    return {
+                        "is_active": False,
+                        "load_number": None,
+                        "eta": None,
+                        "flight_manifest_locator": None,
+                        "reason": "not_visible",
+                    }
+
+            load_text, load_locator = self._get_load_number(first_row, timeout_ms=3000)
+            current_load_num = load_text.split(" ")[-1]
+
+            if current_load_num != str(target_load_number):
+                return {
+                    "is_active": False,
+                    "load_number": current_load_num,
+                    "eta": None,
+                    "flight_manifest_locator": None,
+                    "reason": "load_mismatch",
+                }
+
+            eta_text, eta_locator = self._get_eta(first_row, timeout_ms=3000)
+
+            return {
+                "is_active": True,
+                "load_number": current_load_num,
+                "eta": eta_text,
+                "flight_manifest_locator": first_row,
+                "reason": "ok",
+            }
+        except Exception as exc:
+            logger.debug("Error checking active section for Load %s: %s", target_load_number, exc)
+            return {
+                "is_active": False,
+                "load_number": None,
+                "eta": None,
+                "flight_manifest_locator": None,
+                "reason": f"error: {exc}",
+            }
+
+    def wait_for_flight_closed(self, status_dict: dict[str, any], output_path: str, poll_interval_sec: int = 30, max_duration_sec: int = 2700) -> bool:
+        """
+        Polls the active flight manifest section until closure, date rollover, or cycle timeout.
+
+        - Verifies that the top section still matches status_dict['load_number'].
+        - Aborts if date rolls over past midnight.
+        - Dynamically polls every 5s when ETA <= 1, otherwise every 30s.
+        - Caches in-memory screenshot bytes when ETA <= 1; if load vanishes before
+          'Closed' is detected, saves the in-memory fallback screenshot to output_path.
+        - Enforces Rule 1: Never recycles the session if ETA <= 5.
+        - Once 'Closed' is detected, immediately invokes self.take_manifest_screenshot(status_dict, output_path).
 
         Args:
-            status_dict: Dictionary containing status locators and 'load_number'.
+            status_dict: Dictionary containing 'load_number' and initial locators.
             output_path: File path where screenshot will be saved.
-            poll_interval_s: Sleep duration between polls in seconds (default: 30s).
-        """
-        poll_locator = status_dict.get("eta_locator") or status_dict.get("load_locator")
-        if poll_locator is None:
-            raise RuntimeError("Cannot wait for flight closed: missing locator in status_dict.")
+            poll_interval_sec: Default fallback polling interval in seconds.
+            max_duration_sec: Maximum duration in seconds before recycling session (default 45 min).
 
+        Returns:
+            bool: True if a screenshot was saved (closed or fallback), False if cycled or aborted.
+        """
         load_num = status_dict.get("load_number", "unknown")
-        logger.info("Starting closure monitoring for Load %s (polling every %ds)...", load_num, poll_interval_s)
+        start_date = datetime.now().strftime("%Y-%m-%d")
+        start_time = time.monotonic()
+        last_screenshot_bytes: bytes | None = None
+
+        logger.info(
+            "Starting closure monitoring for Load %s (date: %s)...",
+            load_num,
+            start_date,
+        )
 
         while True:
-            try:
-                current_text = poll_locator.inner_text().strip()
-                logger.debug("Load %s status poll text: '%s'", load_num, current_text)
+            # 1. Date rollover check: avoid cross-midnight misattribution
+            if self._is_date_rolled_over(start_date):
+                logger.warning(
+                    "Date rolled over past midnight while waiting for Load %s on %s. Aborting wait.",
+                    load_num,
+                    start_date,
+                )
+                return False
 
-                if current_text.lower() == "closed":
-                    logger.info("Flight for Load %s is CLOSED. Invoking manifest screenshot...", load_num)
-                    self.take_manifest_screenshot(status_dict, output_path)
-                    break
-            except Exception as exc:
-                logger.warning("Error reading status text for Load %s during poll: %s", load_num, exc)
+            # 2. Section check: verify target load is still active in the first section
+            section_status = self._check_active_section(load_num)
+            if not section_status["is_active"]:
+                reason = section_status.get("reason", "unknown")
+                logger.warning(
+                    "Load %s is no longer active in the first section (reason: %s).",
+                    load_num,
+                    reason,
+                )
+                # If we have a cached in-memory screenshot from when ETA <= 1, save as fallback!
+                if last_screenshot_bytes is not None:
+                    parent_dir = Path(output_path).parent
+                    parent_dir.mkdir(parents=True, exist_ok=True)
+                    Path(output_path).write_bytes(last_screenshot_bytes)
+                    logger.warning(
+                        "Board cleared before 'Closed' ETA detected for Load %s. Saved last available in-memory screenshot: %s",
+                        load_num,
+                        output_path,
+                    )
+                    return True
+                return False
 
-            time.sleep(poll_interval_s)
+            current_text = section_status["eta"] or ""
+            logger.debug("Load %s status poll text: '%s'", load_num, current_text)
+
+            # 3. Check for "Closed"
+            if current_text.lower() == "closed":
+                logger.info("Flight for Load %s is CLOSED. Invoking manifest screenshot...", load_num)
+                if section_status.get("flight_manifest_locator"):
+                    status_dict["flight_manifest_locator"] = section_status["flight_manifest_locator"]
+                self.take_manifest_screenshot(status_dict, output_path)
+                return True
+
+            # 4. Parse ETA minutes
+            eta_mins = self._parse_eta_minutes(current_text)
+
+            # 5. Check weather hold / cycle ceiling (Rule 1: Never recycle if ETA <= 5)
+            elapsed = time.monotonic() - start_time
+            if self._should_recycle_session(elapsed, eta_mins, max_duration_sec=max_duration_sec):
+                logger.info(
+                    "Load %s still pending after %ds (ETA: %s). Cycling browser session to prevent memory bloat...",
+                    load_num,
+                    int(elapsed),
+                    current_text,
+                )
+                return False
+
+            # 6. Cache in-memory screenshot when ETA <= 1 (including 0, -1, -2, etc.)
+            if eta_mins is not None and eta_mins <= 1:
+                try:
+                    manifest_loc = section_status.get("flight_manifest_locator") or status_dict.get("flight_manifest_locator")
+                    if manifest_loc:
+                        last_screenshot_bytes = manifest_loc.screenshot(
+                            type="png", animations="disabled", timeout=5000
+                        )
+                        logger.debug(
+                            "Cached in-memory fallback screenshot for Load %s (ETA: %s)",
+                            load_num,
+                            current_text,
+                        )
+                except Exception as exc:
+                    logger.debug("Could not cache in-memory screenshot for Load %s: %s", load_num, exc)
+
+            # 7. Sleep dynamic poll interval (5s when ETA <= 1, 30s otherwise)
+            interval = self._get_poll_interval(eta_mins, default_poll_interval_sec= poll_interval_sec)
+            time.sleep(interval)
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         """
