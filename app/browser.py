@@ -77,7 +77,7 @@ class BrowserController:
 
         logger.info("Launching headless Chromium (ARM64 mode)...")
         self._browser = self._playwright.chromium.launch(
-            headless=False,
+            headless=True,
             args=ARM64_CHROMIUM_ARGS,
         )
 
